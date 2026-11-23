@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from skyrl.backends.skyrl_train.inference_servers.utils import (
+    _apply_expert_nvfp4_weight_sync_defaults,
     _apply_serialized_fp8_weight_sync_defaults,
     build_frozen_vllm_cli_args,
     build_vllm_cli_args,
@@ -57,6 +58,44 @@ def test_serialized_fp8_weight_sync_rejects_conflicting_vllm_settings(engine_kwa
             engine_kwargs,
             model_path="qwen35-test",
         )
+
+
+def _expert_nvfp4_cfg(monkeypatch) -> SkyRLTrainConfig:
+    """A megatron + expert_nvfp4 config whose HF config load is stubbed (no network)."""
+    import transformers
+
+    monkeypatch.setattr(
+        transformers.AutoConfig, "from_pretrained", lambda *_args, **_kwargs: SimpleNamespace(num_hidden_layers=4)
+    )
+    cfg = SkyRLTrainConfig()
+    cfg.trainer.strategy = "megatron"
+    cfg.trainer.policy.megatron_config.expert_nvfp4 = True
+    return cfg
+
+
+def test_expert_nvfp4_defaults_boot_vllm_with_dummy_weights(monkeypatch):
+    engine_kwargs = {}
+
+    _apply_expert_nvfp4_weight_sync_defaults(_expert_nvfp4_cfg(monkeypatch), engine_kwargs)
+
+    assert engine_kwargs["quantization"] == "modelopt_fp4"
+    assert engine_kwargs["load_format"] == "dummy"
+    assert engine_kwargs["kernel_config"] == {"moe_backend": "flashinfer_trtllm"}
+
+
+@pytest.mark.parametrize(
+    "engine_kwargs",
+    [
+        {"load_format": "instanttensor"},
+        {"quantization": "fp8"},
+        {"kernel_config": {"moe_backend": "triton"}},
+    ],
+)
+def test_expert_nvfp4_conflict_error_names_expert_nvfp4(engine_kwargs, monkeypatch):
+    """The conflict error must point at expert_nvfp4, not at FP8 weight sync (which is off here)."""
+    with pytest.raises(ValueError, match="expert_nvfp4 is enabled") as exc_info:
+        _apply_expert_nvfp4_weight_sync_defaults(_expert_nvfp4_cfg(monkeypatch), engine_kwargs)
+    assert "FP8 weight sync" not in str(exc_info.value)
 
 
 def test_serialized_fp8_weight_sync_rejects_non_mapping_overrides():
