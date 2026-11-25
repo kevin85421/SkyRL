@@ -177,23 +177,26 @@ def test_save_load_hf_model(ray_init_fixture, strategy):
 
 
 @pytest.mark.parametrize(
-    ("strategy", "hf_export_dtype"),
+    ("strategy", "hf_export_dtype", "cpu_offload"),
     [
-        ("fsdp", "bfloat16"),
-        pytest.param("megatron", "float32", marks=pytest.mark.megatron),
+        ("fsdp", "bfloat16", False),
+        ("fsdp", "bfloat16", True),
+        pytest.param("megatron", "float32", False, marks=pytest.mark.megatron),
     ],
 )
-def test_save_hf_model_export_dtype(ray_init_fixture, strategy, hf_export_dtype):
+def test_save_hf_model_export_dtype(ray_init_fixture, strategy, hf_export_dtype, cpu_offload):
     """
     ``trainer.hf_export_dtype`` sets the dtype of every exported floating-point tensor and of ``config.json``.
 
     The model is exported right after init, with no training step, so each exported tensor must equal the
     original checkpoint's tensor (bf16 on the Hub) cast to the export dtype: FSDP holds the weights as fp32
     master copies, and fp32 -> bf16 of a bf16-representable value is exact; Megatron holds bf16, and the
-    cast up to fp32 is exact.
+    cast up to fp32 is exact. ``cpu_offload`` covers FSDP2-native offload, where the shards live on CPU.
     """
     cfg = get_test_actor_config(strategy)
     cfg.trainer.hf_export_dtype = hf_export_dtype
+    if cpu_offload:
+        cfg.trainer.policy.fsdp_config.cpu_offload = True
     export_dtype = getattr(torch, hf_export_dtype)
 
     try:

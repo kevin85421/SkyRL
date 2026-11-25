@@ -27,6 +27,7 @@ from skyrl.backends.skyrl_train.distributed.fsdp_utils import (
     create_device_mesh,
     fsdp2_clip_grad_norm_,
     fsdp2_get_full_state_dict,
+    fsdp2_get_full_state_dict_in_dtype,
     fsdp2_load_full_state_dict,
     load_fsdp2_model_to_gpu,
     load_fsdp_optimizer,
@@ -584,12 +585,11 @@ class FSDPStrategy(DistributedStrategy):
             raise ValueError("Model must be a HuggingFace model with config and save_pretrained method")
 
         # Step 3: Collect full state dict on rank 0 only
-        output_state_dict = fsdp2_get_full_state_dict(fsdp_model, cpu_offload=True, rank0_only=True)
-        if export_dtype is not None:
-            # Replaces entries one at a time so each source tensor is freed as soon as it is cast.
-            for name, tensor in output_state_dict.items():
-                if tensor.is_floating_point():
-                    output_state_dict[name] = tensor.to(export_dtype)
+        if export_dtype is None:
+            output_state_dict = fsdp2_get_full_state_dict(fsdp_model, cpu_offload=True, rank0_only=True)
+        else:
+            # Cast on the GPU before the copy to CPU, so a bf16 export moves half the bytes of fp32.
+            output_state_dict = fsdp2_get_full_state_dict_in_dtype(fsdp_model, export_dtype)
 
         # Step 4: Save on rank 0 only
         if self.is_rank_0():
