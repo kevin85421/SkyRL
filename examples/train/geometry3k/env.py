@@ -23,6 +23,18 @@ logger = logging.getLogger(__name__)
 # Matches JSON payload between <tool_call> ... </tool_call> tags.
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 SUPPORTED_TOOL_NAMES = {"calc_score"}
+# An escaped backslash, an escaped quote, or a lone backslash, in that order of preference.
+JSON_BACKSLASH_RE = re.compile(r'\\\\|\\"|\\')
+
+
+def _loads_with_latex(raw: str) -> Any:
+    """``json.loads`` that keeps LaTeX backslashes the model wrote unescaped.
+
+    Models write answers like ``{"answer": "\\frac{3}{4}"}`` with one backslash. Plain JSON
+    reads ``\\f`` as a form feed and rejects ``\\s`` (as in ``\\sqrt``), so a correct answer
+    scores 0. Escaped backslashes and quotes are kept; every other backslash is doubled.
+    """
+    return json.loads(JSON_BACKSLASH_RE.sub(lambda m: m.group(0) if len(m.group(0)) == 2 else "\\\\", raw))
 
 
 class Geometry3kEnv(BaseTextEnv):
@@ -59,7 +71,7 @@ class Geometry3kEnv(BaseTextEnv):
 
         raw_json = matches[-1].group(1).strip()
         try:
-            payload = json.loads(raw_json)
+            payload = _loads_with_latex(raw_json)
         except json.JSONDecodeError:
             logger.warning("Failed to decode tool call payload: %s", raw_json)
             return None
@@ -70,7 +82,7 @@ class Geometry3kEnv(BaseTextEnv):
         arguments = payload.get("arguments") or func_dict.get("arguments") or {}
         if isinstance(arguments, str):
             try:
-                arguments = json.loads(arguments)
+                arguments = _loads_with_latex(arguments)
             except json.JSONDecodeError:
                 return None
 
